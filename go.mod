@@ -1,3 +1,3 @@
 module github.com/balinomad/go-ctxmap
 
-go 1.18
+go 1.21
