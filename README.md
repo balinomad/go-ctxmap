@@ -70,7 +70,7 @@ go get github.com/balinomad/go-ctxmap@latest
 
 | Method | Description |
 | :--- | :--- |
-| `NewCtxMap(keySep string, fieldSep string, stringer func(k, v))` | Creates a new `CtxMap` with custom separators and formatting. |
+| `NewCtxMap(keySep string, fieldSep string, stringer func(k string, v any) string)` | Creates a new `CtxMap` with custom separators and formatting. |
 | `Set(key string, value any)` | Sets a key-value pair. Safe for concurrent use. |
 | `Get(key string) (any, bool)` | Retrieves a value by its raw key (prefix is not used). |
 | `GetPrefixed(key string) (any, bool)` | Retrieves a value by its fully prefixed key (e.g., "prefix.key"). |
