@@ -1,6 +1,12 @@
+[![GoDoc](https://pkg.go.dev/badge/github.com/balinomad/go-ctxmap?status.svg)](https://pkg.go.dev/github.com/balinomad/go-ctxmap?tab=doc)
+[![GoMod](https://img.shields.io/github/go-mod/go-version/balinomad/go-ctxmap)](https://github.com/balinomad/go-ctxmap)
+[![Size](https://img.shields.io/github/languages/code-size/balinomad/go-ctxmap)](https://github.com/balinomad/go-ctxmap)
+[![License](https://img.shields.io/github/license/balinomad/go-ctxmap)](./LICENSE)
 [![Go](https://github.com/balinomad/go-ctxmap/actions/workflows/go.yml/badge.svg)](https://github.com/balinomad/go-ctxmap/actions/workflows/go.yml)
+[![Go Report Card](https://goreportcard.com/badge/github.com/balinomad/go-ctxmap)](https://goreportcard.com/report/github.com/balinomad/go-ctxmap)
+[![codecov](https://codecov.io/github/balinomad/go-ctxmap/graph/badge.svg?token=L1K68IIN51)](https://codecov.io/github/balinomad/go-ctxmap)
 
-# go-ctxmap
+# ctxmap
 
 *A thread-safe Go key-value map for contextual data. Features an immutable-style API and is heavily optimized for repeated string serialization via caching. Ideal for structured logging, request contexts, and dynamic configuration.*
 
@@ -22,6 +28,12 @@ It is perfect for use in:
   - **Fully Customizable Output**: You have full control over the output format. You can specify the separator for key prefixes (`.`, `:`, etc.), the separator between key-value pairs (`     `, `|`, etc.), and even provide a custom function to format each pair.
   - **Zero Dependencies**: A lightweight package that relies only on the Go standard library.
 
+
+## 📌 Installation
+
+```bash
+go get github.com/balinomad/go-ctxmap@latest
+```
 
 ## 🚀 Usage
 
@@ -60,34 +72,40 @@ func main() {
 }
 ```
 
-## 📌 Installation
+## 📘 API Reference
 
-```bash
-go get github.com/balinomad/go-ctxmap@latest
-```
+### Constructor Functions
 
-## 📘 API Highlights
+| Function | Description |
+|----------|-------------|
+| `NewCtxMap(keySegmentSeparator string, fieldSeparator string, stringer func(k string, v any) string)` | Creates a new `CtxMap` with custom separators and formatting. |
+
+### Methods
 
 | Method | Description |
 | :--- | :--- |
-| `NewCtxMap(keySep string, fieldSep string, stringer func(k string, v any) string)` | Creates a new `CtxMap` with custom separators and formatting. |
-| `Set(key string, value any)` | Sets a key-value pair. Safe for concurrent use. |
 | `Get(key string) (any, bool)` | Retrieves a value by its raw key (prefix is not used). |
 | `GetPrefixed(key string) (any, bool)` | Retrieves a value by its fully prefixed key (e.g., "prefix.key"). |
+| `Set(key string, value any)` | Sets a key-value pair. Safe for concurrent use. |
+| `SetMultiple(keyValues map[string]any)` | Sets multiple key-value pairs efficiently. Safe for concurrent use. |
 | `Delete(key string)` | Removes a key from the map. |
+| `DeletePrefixed(prefix string)` | Removes keys using the current prefix. |
+| `Clear()` | Removes all keys from the map. |
+| `ReplaceAll(keyValues map[string]any)` | Replaces all key-value pairs with the given map. |
 | `WithPairs(keyValues ...any)` | **(Immutable)** Returns a *new* map with additional key-value pairs. |
 | `WithPrefix(prefix string)` | **(Immutable)** Returns a *new* map with a key prefix added. |
 | `Merge(other *CtxMap)` | **(Immutable)** Returns a *new* map combining the receiver and another `CtxMap`. |
 | `Clone() *CtxMap` | **(Immutable)** Returns a deep copy of the map. |
-| `String() string` | Returns a cached, string representation of the map. Very fast on repeated calls. |
 | `AsMap() map[string]any` | Returns the map's data as a `map[string]any`. **Warning**: May return the internal map for performance; do not modify. |
 | `ToMapCopy() map[string]any` | Returns a *safe copy* of the map's data. |
+| `ToSliceCopy() []any` | Returns a *safe copy* of the map's data as a slice. |
 | `Len() int` | Returns the number of items in the map. |
 | `Range(fn func(k, v))` | Iterates over a snapshot of the map, applying prefixes to keys. |
+| `String() string` | Returns a cached, string representation of the map. Very fast on repeated calls. |
 
------
+## 🔧 Advanced Usage
 
-## 🔧 Advanced Example: Structured Logging Context
+### Structured Logging Context
 
 `CtxMap` is ideal for building up a structured logging context as a request flows through your application. Prefixes help organize data from different layers (middleware, services, database), and the final `String()` call is efficient.
 
@@ -153,11 +171,11 @@ The primary performance goal of `go-ctxmap` is to make the `String()` operation 
 
 This is achieved through a multi-level caching strategy:
 
-1.  **Full String Caching**: If `String()` is called and no data has changed since the last call, the previously computed string is returned instantly without any new allocations or computations.
-2.  **Granular Field Caching**: When a value is set via `Set()` or added via `WithPairs()`, the map marks only the affected keys as "dirty." When `String()` is called next:
-  - The formatted strings for "clean" (unchanged) keys are retrieved from an internal cache.
-  - Only the "dirty" keys are re-formatted.
-  - The final string is built by joining the cached and newly formatted parts.
+  - **Full String Caching**: If `String()` is called and no data has changed since the last call, the previously computed string is returned instantly without any new allocations or computations.
+  - **Granular Field Caching**: When a value is set via `Set()` or added via `WithPairs()`, the map marks only the affected keys as "dirty." When `String()` is called next:
+    - The formatted strings for "clean" (unchanged) keys are retrieved from an internal cache.
+    - Only the "dirty" keys are re-formatted.
+    - The final string is built by joining the cached and newly formatted parts.
 
 This means that if you have a context with 20 fields and you only change one, the cost of the next `String()` call is close to formatting a single field, not all 20.
 
@@ -165,8 +183,8 @@ This means that if you have a context with 20 fields and you only change one, th
 
 `CtxMap` is designed for high-concurrency environments and guarantees safety through two primary mechanisms:
 
-1.  **Internal Locking**: All methods that modify the map's internal state (like `Set`, `Delete`, `Clear`) use a `sync.RWMutex` to ensure that writes are serialized and that reads occurring during a write are not subject to race conditions. Reads (`Get`, `Len`, `String`) use a read lock, allowing multiple goroutines to read from the same map concurrently.
-2.  **Immutability**: The methods `WithPairs`, `WithPrefix`, `Merge`, and `Clone` do not modify the original map. Instead, they return a new `CtxMap` instance with its own data and locks. This is a powerful pattern for concurrency: you can safely pass a `CtxMap` to multiple goroutines, and if they need to add context, they can create their own "local" version without ever needing to lock the original. This significantly reduces lock contention in highly parallel workflows.
+  - **Internal Locking**: All methods that modify the map's internal state (like `Set`, `Delete`, `Clear`) use a `sync.RWMutex` to ensure that writes are serialized and that reads occurring during a write are not subject to race conditions. Reads (`Get`, `Len`, `String`) use a read lock, allowing multiple goroutines to read from the same map concurrently.
+  - **Immutability**: The methods `WithPairs`, `WithPrefix`, `Merge`, and `Clone` do not modify the original map. Instead, they return a new `CtxMap` instance with its own data and locks. This is a powerful pattern for concurrency: you can safely pass a `CtxMap` to multiple goroutines, and if they need to add context, they can create their own "local" version without ever needing to lock the original. This significantly reduces lock contention in highly parallel workflows.
 
 ## ⚖️ License
 
