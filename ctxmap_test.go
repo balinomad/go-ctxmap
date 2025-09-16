@@ -2,6 +2,7 @@ package ctxmap
 
 import (
 	"fmt"
+	"math"
 	"reflect"
 	"sort"
 	"strings"
@@ -194,25 +195,209 @@ func TestCtxMap_GetPrefixed(t *testing.T) {
 // It ensures that new key-value pairs are added correctly and existing keys are overwritten correctly.
 // The test covers cases with setting new keys and overwriting existing keys.
 func TestCtxMap_Set(t *testing.T) {
-	// This test needs to verify the state of the map after the operation.
-	t.Run("set new key", func(t *testing.T) {
-		m := NewCtxMap(".", " ", nil)
-		m.Set("a", 1)
-		val, ok := m.Get("a")
-		if !ok || val != 1 {
-			t.Errorf("Set failed, expected to find key 'a' with value 1, got val=%v, ok=%t", val, ok)
+	tests := []struct {
+		name string
+		ops  []struct {
+			key string
+			val any
 		}
-	})
+		want map[string]any
+	}{
+		{
+			name: "set new key",
+			ops: []struct {
+				key string
+				val any
+			}{
+				{"a", 1},
+			},
+			want: map[string]any{"a": 1},
+		},
+		{
+			name: "overwrite existing key",
+			ops: []struct {
+				key string
+				val any
+			}{
+				{"a", 1},
+				{"a", 2},
+			},
+			want: map[string]any{"a": 2},
+		},
+		{
+			name: "overwrite existing key with same value",
+			ops: []struct {
+				key string
+				val any
+			}{
+				{"a", 1},
+				{"a", 1},
+			},
+			want: map[string]any{"a": 1},
+		},
+		{
+			name: "overwrite existing key with different type",
+			ops: []struct {
+				key string
+				val any
+			}{
+				{"a", 1},
+				{"a", uint64(1)},
+			},
+			want: map[string]any{"a": uint64(1)},
+		},
+		{
+			name: "set multiple different keys",
+			ops: []struct {
+				key string
+				val any
+			}{
+				{"a", 1},
+				{"b", "hello"},
+				{"c", true},
+			},
+			want: map[string]any{"a": 1, "b": "hello", "c": true},
+		},
+	}
 
-	t.Run("overwrite existing key", func(t *testing.T) {
-		m := NewCtxMap(".", " ", nil)
-		m.Set("a", 1)
-		m.Set("a", 2)
-		val, ok := m.Get("a")
-		if !ok || val != 2 {
-			t.Errorf("Set overwrite failed, expected to find key 'a' with value 2, got val=%v, ok=%t", val, ok)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewCtxMap(".", " ", nil)
+
+			for _, op := range tt.ops {
+				m.Set(op.key, op.val)
+			}
+
+			for k, wantVal := range tt.want {
+				gotVal, ok := m.Get(k)
+				if !ok || gotVal != wantVal {
+					t.Errorf("expected key=%q to have val=%v, got val=%v, ok=%t",
+						k, wantVal, gotVal, ok)
+				}
+			}
+		})
+	}
+}
+
+func TestCtxMap_SetMultiple(t *testing.T) {
+	tests := []struct {
+		name      string
+		setup     func(m *CtxMap)
+		input     map[string]any
+		want      map[string]any
+		wantDirty []string
+	}{
+		{
+			name:  "empty input does nothing",
+			input: map[string]any{},
+			setup: nil,
+			want:  map[string]any{},
+			// no dirty keys expected
+			wantDirty: []string{},
+		},
+		{
+			name: "set new keys",
+			input: map[string]any{
+				"a": 1,
+				"b": "hello",
+			},
+			want: map[string]any{
+				"a": 1,
+				"b": "hello",
+			},
+			wantDirty: []string{"a", "b"},
+		},
+		{
+			name: "overwrite existing key with new value",
+			setup: func(m *CtxMap) {
+				m.Set("a", 1)
+			},
+			input: map[string]any{
+				"a": 2,
+			},
+			want: map[string]any{
+				"a": 2,
+			},
+			wantDirty: []string{"a"},
+		},
+		{
+			name: "overwrite existing key with same value (no effective change)",
+			setup: func(m *CtxMap) {
+				m.Set("a", 1)
+			},
+			input: map[string]any{
+				"a": 1,
+			},
+			want: map[string]any{
+				"a": 1,
+			},
+			wantDirty: []string{}, // unchanged, so no dirty keys
+		},
+		{
+			name: "overwrite with different type",
+			setup: func(m *CtxMap) {
+				m.Set("a", 1)
+			},
+			input: map[string]any{
+				"a": uint64(1),
+			},
+			want: map[string]any{
+				"a": uint64(1),
+			},
+			wantDirty: []string{"a"},
+		},
+		{
+			name: "set multiple keys at once",
+			setup: func(m *CtxMap) {
+				m.Set("x", true)
+			},
+			input: map[string]any{
+				"a": 1,
+				"b": "world",
+				"x": false, // overwrite existing
+			},
+			want: map[string]any{
+				"a": 1,
+				"b": "world",
+				"x": false,
+			},
+			wantDirty: []string{"a", "b", "x"},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := NewCtxMap(".", " ", nil)
+
+			if tt.setup != nil {
+				tt.setup(m)
+				// reset dirtyKeys from setup so only SetMultiple effects are tracked
+				m.dirtyKeys = make(map[string]struct{})
+			}
+
+			m.SetMultiple(tt.input)
+
+			// Verify final state
+			for k, wantVal := range tt.want {
+				gotVal, ok := m.Get(k)
+				if !ok || gotVal != wantVal {
+					t.Errorf("expected key=%q to have val=%v, got val=%v (ok=%t)", k, wantVal, gotVal, ok)
+				}
+			}
+
+			// Verify dirty keys
+			gotDirty := make([]string, 0, len(m.dirtyKeys))
+			for k := range m.dirtyKeys {
+				gotDirty = append(gotDirty, k)
+			}
+			sort.Strings(gotDirty)
+			sort.Strings(tt.wantDirty)
+
+			if !reflect.DeepEqual(gotDirty, tt.wantDirty) {
+				t.Errorf("dirty keys mismatch: want=%v, got=%v", tt.wantDirty, gotDirty)
+			}
+		})
+	}
 }
 
 // TestCtxMap_Delete tests the Delete() method of a CtxMap.
@@ -767,6 +952,81 @@ func TestCtxMap_String_Empty(t *testing.T) {
 	}
 }
 
+// TestCtxMap_markDirty tests the markDirty() method of a CtxMap.
+// It ensures that markDirty() correctly marks keys as dirty and
+// increments the current generation.
+func TestCtxMap_markDirty(t *testing.T) {
+	tests := []struct {
+		name              string
+		setup             func(m *CtxMap)
+		key               string
+		wantDirtyKeys     []string
+		wantGenerationInc int // how many times generation should increase
+	}{
+		{
+			name: "dirtyKeys is nil, first key added",
+			setup: func(m *CtxMap) {
+				m.dirtyKeys = nil
+				m.currentGeneration = 0
+			},
+			key:               "a",
+			wantDirtyKeys:     []string{"a"},
+			wantGenerationInc: 1,
+		},
+		{
+			name: "add new key to existing dirtyKeys",
+			setup: func(m *CtxMap) {
+				m.dirtyKeys = map[string]struct{}{"a": {}}
+				m.currentGeneration = 5
+			},
+			key:               "b",
+			wantDirtyKeys:     []string{"a", "b"},
+			wantGenerationInc: 1,
+		},
+		{
+			name: "add duplicate key (already dirty)",
+			setup: func(m *CtxMap) {
+				m.dirtyKeys = map[string]struct{}{"a": {}}
+				m.currentGeneration = 10
+			},
+			key:               "a",
+			wantDirtyKeys:     []string{"a"}, // no duplicate
+			wantGenerationInc: 1,             // still increments
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := &CtxMap{}
+
+			// Run setup
+			tt.setup(m)
+			initialGen := m.currentGeneration
+
+			// Call markDirty
+			m.markDirty(tt.key)
+
+			// Collect actual dirty keys
+			gotDirty := make([]string, 0, len(m.dirtyKeys))
+			for k := range m.dirtyKeys {
+				gotDirty = append(gotDirty, k)
+			}
+			sort.Strings(gotDirty)
+			sort.Strings(tt.wantDirtyKeys)
+
+			if !reflect.DeepEqual(gotDirty, tt.wantDirtyKeys) {
+				t.Errorf("dirtyKeys mismatch: want=%v, got=%v", tt.wantDirtyKeys, gotDirty)
+			}
+
+			// Check generation increment
+			gotInc := int(m.currentGeneration - initialGen)
+			if gotInc != tt.wantGenerationInc {
+				t.Errorf("currentGeneration increment mismatch: want=%d, got=%d", tt.wantGenerationInc, gotInc)
+			}
+		})
+	}
+}
+
 // Test_toString tests the toString() function to ensure it correctly converts
 // a given value into a string. The test covers cases with strings, integers,
 // booleans, and nil values.
@@ -781,14 +1041,66 @@ func Test_toString(t *testing.T) {
 	}{
 		{name: "string", args: args{v: "hello"}, want: "hello"},
 		{name: "int", args: args{v: 123}, want: "123"},
+		{name: "int64", args: args{v: int64(-456)}, want: "-456"},
 		{name: "uint", args: args{v: uint(123)}, want: "123"},
-		{name: "bool", args: args{v: true}, want: "true"},
+		{name: "uint64", args: args{v: uint64(789)}, want: "789"},
+		{name: "bool true", args: args{v: true}, want: "true"},
+		{name: "bool false", args: args{v: false}, want: "false"},
 		{name: "nil", args: args{v: nil}, want: "<nil>"},
+		{name: "default case float", args: args{v: 3.14}, want: "3.14"},
+		{name: "default case struct", args: args{v: struct{ X int }{X: 1}}, want: "{1}"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := toString(tt.args.v); got != tt.want {
-				t.Errorf("toString() = %v, want %v", got, tt.want)
+				t.Errorf("toString(%v) = %v, want %v", tt.args.v, got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_itoa64(t *testing.T) {
+	tests := []struct {
+		name string
+		val  int64
+		want string
+	}{
+		{name: "zero", val: 0, want: "0"},
+		{name: "positive single digit", val: 7, want: "7"},
+		{name: "positive multi digit", val: 12345, want: "12345"},
+		{name: "negative single digit", val: -9, want: "-9"},
+		{name: "negative multi digit", val: -98765, want: "-98765"},
+		{name: "max int64", val: math.MaxInt64, want: "9223372036854775807"},
+		{name: "min int64 (overflow case)", val: math.MinInt64, want: "-9223372036854775808"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := itoa64(tt.val)
+			if got != tt.want {
+				t.Errorf("itoa64(%d) = %q, want %q", tt.val, got, tt.want)
+			}
+		})
+	}
+}
+
+func Test_utoa64(t *testing.T) {
+	tests := []struct {
+		name string
+		val  uint64
+		want string
+	}{
+		{name: "zero", val: 0, want: "0"},
+		{name: "single digit", val: 7, want: "7"},
+		{name: "multi digit", val: 1234567890, want: "1234567890"},
+		{name: "max uint64", val: math.MaxUint64, want: "18446744073709551615"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := utoa64(tt.val)
+			if got != tt.want {
+				t.Errorf("utoa64(%d) = %q, want %q", tt.val, got, tt.want)
 			}
 		})
 	}
