@@ -952,6 +952,50 @@ func TestCtxMap_String_Empty(t *testing.T) {
 	}
 }
 
+// TestCtxMap_String_Caching verifies the caching mechanism of the String() method.
+// It ensures that the "fast path" is hit when the map is unchanged, and that the
+// cache is correctly invalidated and updated after a modification.
+func TestCtxMap_String_Caching(t *testing.T) {
+	m := NewCtxMap(".", " ", nil)
+	m.Set("b", "2")
+	m.Set("a", "1")
+
+	// Helper to check the content of the string output regardless of field order.
+	checkStringContent := func(t *testing.T, got string, wantParts ...string) {
+		t.Helper()
+		gotParts := strings.Split(got, " ")
+		sort.Strings(gotParts)
+		sort.Strings(wantParts)
+		if !reflect.DeepEqual(gotParts, wantParts) {
+			t.Errorf("String() content mismatch:\n got: %v\nwant: %v", gotParts, wantParts)
+		}
+	}
+
+	// First call to String(). This populates the cache (slow path)
+	firstResult := m.String()
+	checkStringContent(t, firstResult, "a=1", "b=2")
+
+	// Second call to String(). This MUST hit the fast path and return the cached value
+	secondResult := m.String()
+	if secondResult != firstResult {
+		t.Errorf("Second call should return cached string, but it was different.\nGot: %q\nWant: %q", secondResult, firstResult)
+	}
+
+	// Modifying the map must invalidate the cache
+	m.Set("c", "3")
+
+	// The tird call to String() must use the slow path again to generate a new string
+	thirdResult := m.String()
+	checkStringContent(t, thirdResult, "a=1", "b=2", "c=3")
+
+	// And finally, this is the fourth call to String() that must hit the fast path again
+	// with the new cached value
+	fourthResult := m.String()
+	if fourthResult != thirdResult {
+		t.Errorf("Fourth call should return new cached string, but it was different.\nGot: %q\nWant: %q", fourthResult, thirdResult)
+	}
+}
+
 // TestCtxMap_markDirty tests the markDirty() method of a CtxMap.
 // It ensures that markDirty() correctly marks keys as dirty and
 // increments the current generation.
