@@ -491,15 +491,20 @@ func itoa64(val int64) string {
 	var buf [20]byte // max int64 = 19 digits + optional sign
 	i := len(buf)
 
+	var uval uint64
 	negative := val < 0
 	if negative {
-		val = -val
+		// Negating math.MinInt64 would overflow, but converting to uint64 first is safe
+		uval = uint64(-val)
+	} else {
+		uval = uint64(val)
 	}
 
-	for val > 0 {
+	// Build the string from right to left
+	for uval > 0 {
 		i--
-		buf[i] = byte('0' + val%10)
-		val /= 10
+		buf[i] = byte('0' + uval%10)
+		uval /= 10
 	}
 
 	if negative {
