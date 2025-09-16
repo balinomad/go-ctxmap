@@ -480,6 +480,9 @@ func toString(v any) string {
 	}
 }
 
+// itoa64 converts an int64 to a string using the minimum number of bytes necessary.
+// The returned string does not contain any extra leading zeros.
+// If the value is negative, a single '-' character is prepended to the result.
 func itoa64(val int64) string {
 	if val == 0 {
 		return "0"
@@ -507,6 +510,8 @@ func itoa64(val int64) string {
 	return string(buf[i:])
 }
 
+// utoa64 converts a uint64 to a string using the minimum number of bytes necessary.
+// The returned string does not contain any extra leading zeros.
 func utoa64(val uint64) string {
 	if val == 0 {
 		return "0"

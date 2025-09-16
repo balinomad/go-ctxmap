@@ -9,6 +9,7 @@ import (
 	"testing"
 )
 
+// TestNewCtxMap tests the creation of a new CtxMap and the behavior of the default or custom stringer.
 func TestNewCtxMap(t *testing.T) {
 	// Comparing function pointers in `want` is not reliable.
 	// We will test the behavior of the stringer instead of deep equality of the struct.
@@ -40,6 +41,11 @@ func TestNewCtxMap(t *testing.T) {
 	})
 }
 
+// TestCtxMap_Get tests the Get() method of a CtxMap.
+//
+// It ensures that existing keys return the correct value and non-existent keys return nil.
+// It also tests the return value of the second boolean argument, which indicates whether the key was found in the map.
+// The test covers cases with existing keys, non-existent keys, and empty maps.
 func TestCtxMap_Get(t *testing.T) {
 	// Helper to create a map with test data
 	createTestMap := func(data map[string]any) *CtxMap {
@@ -96,6 +102,11 @@ func TestCtxMap_Get(t *testing.T) {
 	}
 }
 
+// TestCtxMap_GetPrefixed tests the GetPrefixed() method of a CtxMap.
+//
+// It ensures that existing keys with the correct prefix return the correct value and non-existent keys return nil.
+// It also tests the return value of the second boolean argument, which indicates whether the key was found in the map.
+// The test covers cases with existing keys, non-existent keys, and empty maps.
 func TestCtxMap_GetPrefixed(t *testing.T) {
 	// Helper to create a map with test data and configuration
 	createTestMap := func(data map[string]any, prefix, keySep string) *CtxMap {
@@ -178,6 +189,10 @@ func TestCtxMap_GetPrefixed(t *testing.T) {
 	}
 }
 
+// TestCtxMap_Set tests the Set() method of a CtxMap.
+//
+// It ensures that new key-value pairs are added correctly and existing keys are overwritten correctly.
+// The test covers cases with setting new keys and overwriting existing keys.
 func TestCtxMap_Set(t *testing.T) {
 	// This test needs to verify the state of the map after the operation.
 	t.Run("set new key", func(t *testing.T) {
@@ -200,6 +215,10 @@ func TestCtxMap_Set(t *testing.T) {
 	})
 }
 
+// TestCtxMap_Delete tests the Delete() method of a CtxMap.
+//
+// It ensures that existing keys are removed correctly and non-existent keys do not change the map.
+// The test covers cases with deleting existing keys and non-existent keys.
 func TestCtxMap_Delete(t *testing.T) {
 	// This test needs to verify the state of the map after the operation.
 	t.Run("delete existing key", func(t *testing.T) {
@@ -225,6 +244,10 @@ func TestCtxMap_Delete(t *testing.T) {
 	})
 }
 
+// TestCtxMap_DeletePrefixed tests the DeletePrefixed() method of a CtxMap.
+//
+// It ensures that existing keys are removed correctly and non-existent keys do not change the map.
+// The test covers cases with deleting existing keys and non-existent keys.
 func TestCtxMap_DeletePrefixed(t *testing.T) {
 	// This test needs to verify the state of the map after the operation.
 	t.Run("delete with correct prefix", func(t *testing.T) {
@@ -255,6 +278,10 @@ func TestCtxMap_DeletePrefixed(t *testing.T) {
 	})
 }
 
+// TestCtxMap_WithPairs tests the WithPairs() method of a CtxMap.
+//
+// It ensures that new key-value pairs are added correctly and incomplete pairs are skipped.
+// The test covers cases with adding new pairs, incomplete pairs, and no pairs.
 func TestCtxMap_WithPairs(t *testing.T) {
 	baseMap := NewCtxMap(".", " ", nil)
 	baseMap.Set("a", 1)
@@ -311,6 +338,10 @@ func TestCtxMap_WithPairs(t *testing.T) {
 	})
 }
 
+// TestCtxMap_ReplaceAll tests the ReplaceAll() method of a CtxMap.
+//
+// It ensures that ReplaceAll() correctly replaces all key-value pairs in the map.
+// The test covers cases with replacing an existing map and replacing with an empty slice.
 func TestCtxMap_ReplaceAll(t *testing.T) {
 	t.Run("replace existing map", func(t *testing.T) {
 		m := NewCtxMap(".", " ", nil)
@@ -333,6 +364,10 @@ func TestCtxMap_ReplaceAll(t *testing.T) {
 	})
 }
 
+// TestCtxMap_Clear tests the Clear() method of a CtxMap.
+//
+// It ensures that Clear() correctly removes all key-value pairs from the map.
+// The test covers cases with clearing a non-empty map.
 func TestCtxMap_Clear(t *testing.T) {
 	t.Run("clear a non-empty map", func(t *testing.T) {
 		m := NewCtxMap(".", " ", nil)
@@ -344,6 +379,10 @@ func TestCtxMap_Clear(t *testing.T) {
 	})
 }
 
+// TestCtxMap_WithPrefix tests the WithPrefix() method of a CtxMap.
+//
+// It ensures that WithPrefix() correctly returns a new CtxMap with an added prefix.
+// The test covers cases with adding a prefix, adding a nested prefix, and returning the same instance with an empty prefix.
 func TestCtxMap_WithPrefix(t *testing.T) {
 	baseMap := NewCtxMap(".", " ", nil)
 	baseMap.Set("key", "val")
@@ -376,6 +415,10 @@ func TestCtxMap_WithPrefix(t *testing.T) {
 	})
 }
 
+// TestCtxMap_Merge tests the Merge() method of a CtxMap.
+//
+// It ensures that Merge() correctly returns a new CtxMap containing pairs from both maps.
+// The test covers cases with merging two maps, preserving the original maps, and handling duplicate keys.
 func TestCtxMap_Merge(t *testing.T) {
 	mapA := NewCtxMap(".", " ", nil)
 	mapA.Set("a", 1)
@@ -399,6 +442,9 @@ func TestCtxMap_Merge(t *testing.T) {
 	})
 }
 
+// TestCtxMap_Clone tests the Clone() method of a CtxMap.
+//
+// It ensures that Clone() correctly returns a new CtxMap with the same data as the original map.
 func TestCtxMap_Clone(t *testing.T) {
 	t.Run("clone a map", func(t *testing.T) {
 		original := NewCtxMap(".", " ", nil).WithPrefix("p1")
@@ -424,6 +470,10 @@ func TestCtxMap_Clone(t *testing.T) {
 	})
 }
 
+// TestCtxMap_AsMap tests the AsMap() method of a CtxMap.
+//
+// It ensures that AsMap() correctly returns a snapshot of the map with prefixes applied.
+// The test covers cases with and without prefixes.
 func TestCtxMap_AsMap(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -464,6 +514,11 @@ func TestCtxMap_AsMap(t *testing.T) {
 	}
 }
 
+// TestCtxMap_ToMapCopy tests the ToMapCopy() method of a CtxMap.
+//
+// It tests that ToMapCopy() returns a new map containing a snapshot of the data with prefixes applied,
+// and that modifying the copy does not affect the original map.
+// It also tests that ToMapCopy() works correctly with prefixes.
 func TestCtxMap_ToMapCopy(t *testing.T) {
 	originalMap := NewCtxMap(".", " ", nil)
 	originalMap.Set("a", 1)
@@ -509,6 +564,12 @@ func (p sortablePairs) Less(i, j int) bool {
 	return fmt.Sprint(p.slice[i*2]) < fmt.Sprint(p.slice[j*2])
 }
 
+// TestCtxMap_ToSliceCopy tests the ToSliceCopy() method of a CtxMap.
+//
+// It ensures that the returned slice contains all the key-value pairs from the map,
+// with the prefix applied as needed. The test covers cases with and without prefixes.
+// The test also ensures that the returned slice is independent of the original map,
+// and that modifying the copy does not affect the original map.
 func TestCtxMap_ToSliceCopy(t *testing.T) {
 	// Since map iteration order is not guaranteed, we sort the slices for stable comparison.
 	sorter := func(s []any) {
@@ -563,6 +624,10 @@ func TestCtxMap_ToSliceCopy(t *testing.T) {
 	}
 }
 
+// TestCtxMap_Len tests the Len() method of a CtxMap.
+//
+// It ensures that Len() correctly returns the number of key-value pairs in the map.
+// The test covers cases with empty maps and maps with items.
 func TestCtxMap_Len(t *testing.T) {
 	tests := []struct {
 		name     string
@@ -593,6 +658,12 @@ func TestCtxMap_Len(t *testing.T) {
 	}
 }
 
+// TestCtxMap_Range tests the Range() method of a CtxMap.
+//
+// It ensures that Range() correctly iterates over the map, applying the prefix to keys.
+// The test covers cases with and without prefixes.
+//
+// The test also verifies that the passed callback function is called for each key-value pair in the map.
 func TestCtxMap_Range(t *testing.T) {
 	t.Run("range over map with prefix", func(t *testing.T) {
 		m := NewCtxMap(".", " ", nil).WithPrefix("p")
@@ -612,21 +683,24 @@ func TestCtxMap_Range(t *testing.T) {
 
 	t.Run("range over map without prefix", func(t *testing.T) {
 		m := NewCtxMap(".", " ", nil)
-		m.Set("a", 1)
-		m.Set("b", 2)
+		m.SetMultiple(map[string]any{"a": 1, "b": uint(2)})
 
 		results := make(map[string]any)
 		m.Range(func(k string, v any) {
 			results[k] = v
 		})
 
-		expected := map[string]any{"a": 1, "b": 2}
+		expected := map[string]any{"a": 1, "b": uint(2)}
 		if !reflect.DeepEqual(results, expected) {
 			t.Errorf("Range() results = %v, want %v", results, expected)
 		}
 	})
 }
 
+// TestCtxMap_String tests the String() method of a CtxMap.
+//
+// It ensures that the correct output is generated, in the correct format, and that the
+// order of key-value pairs does not affect the result.
 func TestCtxMap_String(t *testing.T) {
 	m := NewCtxMap(".", " ", nil)
 	m.Set("a", 1)
@@ -655,6 +729,11 @@ func TestCtxMap_String(t *testing.T) {
 	}
 }
 
+// TestCtxMap_String_WithPrefix tests the String() method of a CtxMap with a prefix.
+//
+// It ensures that the correct output is generated, in the correct format, and that the
+// order of key-value pairs does not affect the result.
+// The test covers cases with and without a prefix.
 func TestCtxMap_String_WithPrefix(t *testing.T) {
 	m := NewCtxMap(".", " ", nil).WithPrefix("pre")
 	m.Set("a", 1)
@@ -679,6 +758,7 @@ func TestCtxMap_String_WithPrefix(t *testing.T) {
 	}
 }
 
+// TestCtxMap_String_Empty tests that the String() method returns an empty string for an empty CtxMap.
 func TestCtxMap_String_Empty(t *testing.T) {
 	m := NewCtxMap(".", " ", nil)
 	got := m.String()
@@ -687,6 +767,9 @@ func TestCtxMap_String_Empty(t *testing.T) {
 	}
 }
 
+// Test_toString tests the toString() function to ensure it correctly converts
+// a given value into a string. The test covers cases with strings, integers,
+// booleans, and nil values.
 func Test_toString(t *testing.T) {
 	type args struct {
 		v any
@@ -698,6 +781,7 @@ func Test_toString(t *testing.T) {
 	}{
 		{name: "string", args: args{v: "hello"}, want: "hello"},
 		{name: "int", args: args{v: 123}, want: "123"},
+		{name: "uint", args: args{v: uint(123)}, want: "123"},
 		{name: "bool", args: args{v: true}, want: "true"},
 		{name: "nil", args: args{v: nil}, want: "<nil>"},
 	}
@@ -710,6 +794,9 @@ func Test_toString(t *testing.T) {
 	}
 }
 
+// Test_joinPrefix tests the joinPrefix() function to ensure it correctly combines
+// two prefixes with a separator, and handles edge cases where one or both prefixes
+// are empty strings.
 func Test_joinPrefix(t *testing.T) {
 	type args struct {
 		existing  string
