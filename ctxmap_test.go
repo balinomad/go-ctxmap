@@ -321,7 +321,7 @@ func TestCtxMap_SetMultiple(t *testing.T) {
 			wantDirty: []string{"a"},
 		},
 		{
-			name: "overwrite existing key with same value (no effective change)",
+			name: "overwrite existing key with same value (always marks dirty for safety)",
 			setup: func(m *CtxMap) {
 				m.Set("a", 1)
 			},
@@ -331,7 +331,8 @@ func TestCtxMap_SetMultiple(t *testing.T) {
 			want: map[string]any{
 				"a": 1,
 			},
-			wantDirty: []string{}, // unchanged, so no dirty keys
+			// The safe implementation *must* mark it as dirty.
+			wantDirty: []string{"a"},
 		},
 		{
 			name: "overwrite with different type",
@@ -1011,7 +1012,7 @@ func TestCtxMap_markDirty(t *testing.T) {
 			name: "dirtyKeys is nil, first key added",
 			setup: func(m *CtxMap) {
 				m.dirtyKeys = nil
-				m.currentGeneration = 0
+				m.currentGeneration.Store(0)
 			},
 			key:               "a",
 			wantDirtyKeys:     []string{"a"},
@@ -1021,7 +1022,7 @@ func TestCtxMap_markDirty(t *testing.T) {
 			name: "add new key to existing dirtyKeys",
 			setup: func(m *CtxMap) {
 				m.dirtyKeys = map[string]struct{}{"a": {}}
-				m.currentGeneration = 5
+				m.currentGeneration.Store(5)
 			},
 			key:               "b",
 			wantDirtyKeys:     []string{"a", "b"},
@@ -1031,7 +1032,7 @@ func TestCtxMap_markDirty(t *testing.T) {
 			name: "add duplicate key (already dirty)",
 			setup: func(m *CtxMap) {
 				m.dirtyKeys = map[string]struct{}{"a": {}}
-				m.currentGeneration = 10
+				m.currentGeneration.Store(10)
 			},
 			key:               "a",
 			wantDirtyKeys:     []string{"a"}, // no duplicate
@@ -1045,7 +1046,7 @@ func TestCtxMap_markDirty(t *testing.T) {
 
 			// Run setup
 			tt.setup(m)
-			initialGen := m.currentGeneration
+			initialGen := m.currentGeneration.Load()
 
 			// Call markDirty
 			m.markDirty(tt.key)
@@ -1063,7 +1064,7 @@ func TestCtxMap_markDirty(t *testing.T) {
 			}
 
 			// Check generation increment
-			gotInc := int(m.currentGeneration - initialGen)
+			gotInc := int(m.currentGeneration.Load() - initialGen)
 			if gotInc != tt.wantGenerationInc {
 				t.Errorf("currentGeneration increment mismatch: want=%d, got=%d", tt.wantGenerationInc, gotInc)
 			}

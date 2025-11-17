@@ -5,13 +5,20 @@ import (
 	"maps"
 	"strings"
 	"sync"
+	"sync/atomic"
 )
+
+// partPool recycles string slices to reduce allocations during String() reconstruction.
+var partPool = sync.Pool{
+	New: func() any {
+		// Pre-allocate a slice with reasonable capacity to minimise growth
+		s := make([]string, 0, 16)
+		return &s
+	},
+}
 
 // CtxMap is a thread-safe map for contextual data, optimized for repeated
 // string serialization, such as in structured logging or configuration debugging.
-//
-// It uses a sync.RWMutex for efficient concurrent reads and a caching system
-// to minimize the cost of converting the map to a string.
 type CtxMap struct {
 	mu       sync.RWMutex
 	kv       map[string]any
@@ -20,15 +27,16 @@ type CtxMap struct {
 	fieldSep string
 	stringer func(k string, v any) string
 
-	// Granular caching: track each field independently
-	prefixWithSep string              // cached prefix + separator
-	fieldCache    map[string]string   // key -> formatted string cache
+	prefixWithSep string              // Granular caching: key -> formatted string
+	fieldCache    map[string]string   // Caches clean, formatted key-value strings
 	dirtyKeys     map[string]struct{} // Set of keys needing recalculation
 
-	// Full string caching for when no fields changed
-	lastStringResult     string
-	lastStringGeneration uint64
-	currentGeneration    uint64
+	// Full string caching (lock-free fast-path)
+	lastStringResultVal  atomic.Value // stores string
+	lastStringGeneration atomic.Uint64
+
+	// Generation counter bumped on any mutation.
+	currentGeneration atomic.Uint64
 }
 
 // Ensure CtxMap implements the fmt.Stringer interface.
@@ -47,14 +55,12 @@ func NewCtxMap(keySegmentSeparator string, fieldSeparator string, stringer func(
 	}
 
 	return &CtxMap{
-		kv:       make(map[string]any),
-		keySep:   keySegmentSeparator,
-		fieldSep: fieldSeparator,
-		stringer: stringer,
-
-		// Caching fields initialized on demand or when needed
-		fieldCache: map[string]string{},
-		dirtyKeys:  map[string]struct{}{},
+		kv:         make(map[string]any),
+		keySep:     keySegmentSeparator,
+		fieldSep:   fieldSeparator,
+		stringer:   stringer,
+		fieldCache: make(map[string]string),
+		dirtyKeys:  make(map[string]struct{}),
 	}
 }
 
@@ -62,10 +68,9 @@ func NewCtxMap(keySegmentSeparator string, fieldSeparator string, stringer func(
 // whether the key was found in the map. The prefix is not applied.
 func (m *CtxMap) Get(key string) (any, bool) {
 	m.mu.RLock()
-	defer m.mu.RUnlock()
-
-	v, ok := m.kv[key]
-	return v, ok
+	val, ok := m.kv[key]
+	m.mu.RUnlock()
+	return val, ok
 }
 
 // GetPrefixed retrieves the value by a key that includes the map's prefix.
@@ -87,21 +92,18 @@ func (m *CtxMap) GetPrefixed(key string) (any, bool) {
 	return nil, false
 }
 
-// Set sets key to value with granular cache invalidation.
+// Set sets key to value.
 func (m *CtxMap) Set(key string, value any) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	// Check if this is actually a change to avoid unnecessary invalidation
-	if oldVal, exists := m.kv[key]; exists && oldVal == value {
-		return // No change, no cache invalidation needed
-	}
-
+	// We cannot safely check for equality on `value` (panic risk),
+	// we must assume it's a change and invalidate
 	m.kv[key] = value
 	m.markDirty(key)
 }
 
-// SetMultiple sets multiple key-value pairs efficiently with minimal cache invalidation.
+// SetMultiple sets multiple key-value pairs.
 // This is more efficient than multiple Set() calls when setting many fields at once.
 func (m *CtxMap) SetMultiple(pairs map[string]any) {
 	if len(pairs) == 0 {
@@ -112,11 +114,8 @@ func (m *CtxMap) SetMultiple(pairs map[string]any) {
 	defer m.mu.Unlock()
 
 	for key, value := range pairs {
-		// Check if this is actually a change
-		if oldVal, exists := m.kv[key]; !exists || oldVal != value {
-			m.kv[key] = value
-			m.markDirty(key)
-		}
+		m.kv[key] = value
+		m.markDirty(key)
 	}
 }
 
@@ -127,8 +126,9 @@ func (m *CtxMap) Delete(key string) {
 
 	if _, exists := m.kv[key]; exists {
 		delete(m.kv, key)
-		delete(m.fieldCache, key)
-		m.markDirty(key)
+		delete(m.fieldCache, key) // Remove from clean cache
+		delete(m.dirtyKeys, key)  // Remove from dirty set
+		m.currentGeneration.Add(1)
 	}
 }
 
@@ -163,7 +163,12 @@ func (m *CtxMap) WithPairs(keyValues ...any) *CtxMap {
 	kvNew := make(map[string]any, newSize)
 	maps.Copy(kvNew, m.kv)
 
-	// Copy configuration
+	// Copy caches
+	fieldCacheNew := make(map[string]string, newSize)
+	maps.Copy(fieldCacheNew, m.fieldCache)
+	dirtyKeysNew := make(map[string]struct{}, len(m.dirtyKeys)+len(keyValues)/2)
+	maps.Copy(dirtyKeysNew, m.dirtyKeys)
+
 	newMap := &CtxMap{
 		kv:            kvNew,
 		prefix:        m.prefix,
@@ -171,18 +176,16 @@ func (m *CtxMap) WithPairs(keyValues ...any) *CtxMap {
 		keySep:        m.keySep,
 		fieldSep:      m.fieldSep,
 		stringer:      m.stringer,
-		fieldCache:    make(map[string]string, newSize),
-		dirtyKeys:     map[string]struct{}{},
+		fieldCache:    fieldCacheNew,
+		dirtyKeys:     dirtyKeysNew,
 	}
-
-	// Copy all field cache entries
-	maps.Copy(newMap.fieldCache, m.fieldCache)
-
 	m.mu.RUnlock()
 
-	// Add new pairs
+	// Add new pairs and mark them as dirty
 	for i := 0; i < len(keyValues)-1; i += 2 {
-		kvNew[toString(keyValues[i])] = keyValues[i+1]
+		key := toString(keyValues[i])
+		kvNew[key] = keyValues[i+1]
+		dirtyKeysNew[key] = struct{}{}
 	}
 
 	return newMap
@@ -194,16 +197,15 @@ func (m *CtxMap) ReplaceAll(keyValues ...any) {
 	newSize := len(keyValues) / 2
 	kvNew := make(map[string]any, newSize)
 
+	// All keys are dirty
+	dirtyKeys := make(map[string]struct{}, newSize)
+
 	if len(keyValues) >= 2 {
 		for i := 0; i < len(keyValues)-1; i += 2 {
-			kvNew[toString(keyValues[i])] = keyValues[i+1]
+			key := toString(keyValues[i])
+			kvNew[key] = keyValues[i+1]
+			dirtyKeys[key] = struct{}{}
 		}
-	}
-
-	// All keys are dirty
-	dirtyKeys := map[string]struct{}{}
-	for k := range kvNew {
-		dirtyKeys[k] = struct{}{}
 	}
 
 	m.mu.Lock()
@@ -212,7 +214,7 @@ func (m *CtxMap) ReplaceAll(keyValues ...any) {
 	m.kv = kvNew
 	m.fieldCache = make(map[string]string, newSize)
 	m.dirtyKeys = dirtyKeys
-	m.currentGeneration++
+	m.currentGeneration.Add(1)
 }
 
 // Clear removes all key-value pairs from the map.
@@ -222,9 +224,9 @@ func (m *CtxMap) Clear() {
 
 	if len(m.kv) > 0 {
 		m.kv = make(map[string]any)
-		m.fieldCache = map[string]string{}
-		m.dirtyKeys = map[string]struct{}{}
-		m.currentGeneration++
+		m.fieldCache = make(map[string]string)
+		m.dirtyKeys = make(map[string]struct{})
+		m.currentGeneration.Add(1)
 	}
 }
 
@@ -242,9 +244,16 @@ func (m *CtxMap) WithPrefix(prefix string) *CtxMap {
 	kvCopy := make(map[string]any, mapLen)
 	maps.Copy(kvCopy, m.kv)
 
+	// Prefix change invalidates all formatted strings.
+	// Mark all existing keys as dirty for recalculation.
+	newDirtyKeys := make(map[string]struct{}, mapLen)
+	for k := range kvCopy {
+		newDirtyKeys[k] = struct{}{}
+	}
+
 	newPrefix := joinPrefix(m.prefix, prefix, m.keySep)
 
-	newMap := &CtxMap{
+	return &CtxMap{
 		kv:            kvCopy,
 		prefix:        newPrefix,
 		prefixWithSep: newPrefix + m.keySep,
@@ -252,10 +261,8 @@ func (m *CtxMap) WithPrefix(prefix string) *CtxMap {
 		fieldSep:      m.fieldSep,
 		stringer:      m.stringer,
 		fieldCache:    make(map[string]string, mapLen),
-		dirtyKeys:     map[string]struct{}{},
+		dirtyKeys:     newDirtyKeys,
 	}
-
-	return newMap
 }
 
 // Merge returns a new map containing pairs from both maps.
@@ -272,22 +279,32 @@ func (m *CtxMap) Merge(other *CtxMap) *CtxMap {
 	maps.Copy(kvMerged, m.kv)
 	maps.Copy(kvMerged, other.kv)
 
-	newMap := &CtxMap{
+	// Create a merged private cache (prefer other's entries on conflict)
+	newFieldCache := make(map[string]string, mergedLen)
+	maps.Copy(newFieldCache, m.fieldCache)
+
+	//If prefixes and stringers match, we can inherit the other cache too.
+	// Otherwise, we must invalidate keys coming from 'other'
+	if m.prefixWithSep == other.prefixWithSep {
+		// Safe to copy other's cache, overwriting m's cache for duplicate keys
+		maps.Copy(newFieldCache, other.fieldCache)
+	} else {
+		// Prefixes differ: other's cache entries are invalid for this new map.
+		// We must delete entries in fieldCacheNew that were overwritten by other.kv
+		for k := range other.kv {
+			delete(newFieldCache, k)
+		}
+	}
+
+	return &CtxMap{
 		kv:            kvMerged,
 		prefix:        m.prefix,
 		prefixWithSep: m.prefixWithSep,
 		keySep:        m.keySep,
 		fieldSep:      m.fieldSep,
 		stringer:      m.stringer,
-		fieldCache:    make(map[string]string, mergedLen),
-		dirtyKeys:     map[string]struct{}{},
+		fieldCache:    newFieldCache,
 	}
-
-	// Copy the caches, prioritizing 'other' for conflicts
-	maps.Copy(newMap.fieldCache, m.fieldCache)
-	maps.Copy(newMap.fieldCache, other.fieldCache)
-
-	return newMap
 }
 
 // Clone returns a deep copy of the map.
@@ -296,26 +313,29 @@ func (m *CtxMap) Clone() *CtxMap {
 	defer m.mu.RUnlock()
 
 	kvNew := make(map[string]any, len(m.kv))
-	fieldCacheNew := make(map[string]string, len(m.fieldCache))
-	dirtyKeysNew := make(map[string]struct{}, len(m.dirtyKeys))
-
 	maps.Copy(kvNew, m.kv)
-	maps.Copy(fieldCacheNew, m.fieldCache)
-	maps.Copy(dirtyKeysNew, m.dirtyKeys)
 
-	return &CtxMap{
-		kv:                   kvNew,
-		prefix:               m.prefix,
-		keySep:               m.keySep,
-		fieldSep:             m.fieldSep,
-		stringer:             m.stringer,
-		prefixWithSep:        m.prefixWithSep,
-		fieldCache:           fieldCacheNew,
-		dirtyKeys:            dirtyKeysNew,
-		currentGeneration:    m.currentGeneration,
-		lastStringResult:     m.lastStringResult,
-		lastStringGeneration: m.lastStringGeneration,
+	fieldCacheNew := make(map[string]string, len(m.fieldCache))
+	maps.Copy(fieldCacheNew, m.fieldCache)
+
+	clone := &CtxMap{
+		kv:            kvNew,
+		prefix:        m.prefix,
+		keySep:        m.keySep,
+		fieldSep:      m.fieldSep,
+		stringer:      m.stringer,
+		prefixWithSep: m.prefixWithSep,
+		fieldCache:    fieldCacheNew,
 	}
+
+	// Copy generation state to preserve the cached string if it exists
+	clone.currentGeneration.Store(m.currentGeneration.Load())
+	if v := m.lastStringResultVal.Load(); v != nil {
+		clone.lastStringResultVal.Store(v)
+		clone.lastStringGeneration.Store(m.lastStringGeneration.Load())
+	}
+
+	return clone
 }
 
 // AsMap returns the current snapshot of the map, applying the prefix to keys.
@@ -397,64 +417,74 @@ func (m *CtxMap) Range(fn func(k string, v any)) {
 // String returns a string representation of the map, optimized with caching.
 // This method is the primary performance focus of the package.
 func (m *CtxMap) String() string {
-	m.mu.RLock()
-
-	if len(m.kv) == 0 {
-		m.mu.RUnlock()
-		return ""
-	}
-
-	// Fast path: if nothing has changed, return the cached full string.
-	if m.lastStringResult != "" && m.lastStringGeneration == m.currentGeneration {
-		result := m.lastStringResult
-		m.mu.RUnlock()
-		return result
-	}
-
-	m.mu.RUnlock()
-	m.mu.Lock()
-	defer m.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if m.lastStringResult != "" && m.lastStringGeneration == m.currentGeneration {
-		return m.lastStringResult
-	}
-
-	// Only recalculate dirty fields and reuse cached values for others
-	formattedParts := make([]string, 0, len(m.kv))
-	prefix := m.prefixWithSep
-
-	for k, v := range m.kv {
-		if _, isDirty := m.dirtyKeys[k]; isDirty {
-			// Recalculate and update cache for this dirty key
-			formatted := m.stringer(prefix+k, v)
-			m.fieldCache[k] = formatted
-			formattedParts = append(formattedParts, formatted)
-		} else {
-			// Use existing cached value
-			formattedParts = append(formattedParts, m.fieldCache[k])
+	// Lock-free fast path:
+	if m.lastStringGeneration.Load() == m.currentGeneration.Load() {
+		if v := m.lastStringResultVal.Load(); v != nil {
+			return v.(string)
 		}
 	}
 
-	// All dirty keys are now clean
-	m.dirtyKeys = map[string]struct{}{}
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-	// Build and cache the final string
-	result := strings.Join(formattedParts, m.fieldSep)
-	m.lastStringResult = result
-	m.lastStringGeneration = m.currentGeneration
+	// Double-check under lock
+	gen := m.currentGeneration.Load()
+	if m.lastStringGeneration.Load() == gen {
+		if v := m.lastStringResultVal.Load(); v != nil {
+			return v.(string)
+		}
+	}
+
+	// If empty, trivial
+	if len(m.kv) == 0 {
+		m.lastStringResultVal.Store("")
+		m.lastStringGeneration.Store(gen)
+		return ""
+	}
+
+	// Use pooled slice to reduce allocations
+	ptr := partPool.Get().(*[]string)
+	parts := *ptr
+	parts = parts[:0] // Reset slice, keep capacity
+
+	prefix := m.prefixWithSep
+	for k, v := range m.kv {
+		// Check if key is dirty *or* not present in cache
+		formatted, cached := m.fieldCache[k]
+		if _, isDirty := m.dirtyKeys[k]; isDirty || !cached {
+			// It was dirty or missing: recalculate and cache
+			formatted = m.stringer(prefix+k, v)
+			m.fieldCache[k] = formatted
+		}
+		// Now it's clean and cached, append it
+		parts = append(parts, formatted)
+	}
+
+	// All dirty keys are now clean
+	if len(m.dirtyKeys) > 0 {
+		m.dirtyKeys = make(map[string]struct{})
+	}
+
+	result := strings.Join(parts, m.fieldSep)
+
+	// Return slice to pool
+	*ptr = parts
+	partPool.Put(ptr)
+
+	m.lastStringResultVal.Store(result)
+	m.lastStringGeneration.Store(gen)
 
 	return result
 }
 
-// markDirty is a new internal helper to handle cache invalidation.
+// markDirty is an internal helper to handle cache invalidation.
 // This method assumes the write lock is already held.
 func (m *CtxMap) markDirty(key string) {
 	if m.dirtyKeys == nil {
-		m.dirtyKeys = map[string]struct{}{}
+		m.dirtyKeys = make(map[string]struct{})
 	}
 	m.dirtyKeys[key] = struct{}{}
-	m.currentGeneration++
+	m.currentGeneration.Add(1)
 }
 
 // toString is a helper function that returns the string representation of a value.
@@ -481,6 +511,7 @@ func toString(v any) string {
 }
 
 // itoa64 converts an int64 to a string using the minimum number of bytes necessary.
+// Manual buffer filling is faster than strconv for this specific use case.
 // The returned string does not contain any extra leading zeros.
 // If the value is negative, a single '-' character is prepended to the result.
 func itoa64(val int64) string {
